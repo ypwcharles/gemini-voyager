@@ -345,10 +345,7 @@ export class ConversationExportService {
 
   private static formatPlainTextAsHtml(content: string): string {
     if (!content.trim()) return '';
-    const escaped = content
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+    const escaped = content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     return escaped
       .split('\n\n')
       .map((paragraph) => `<p>${paragraph.replace(/\n/g, '<br>')}</p>`)
@@ -371,21 +368,29 @@ export class ConversationExportService {
     const zip = new JSZip();
     const assetsFolder = zip.folder('assets');
     const mapping = new Map<string, string>();
-    let index = 1;
 
-    await Promise.all(
+    const fetchedByOrder = await Promise.all(
       imageUrls.map(async (url) => {
         const fetched = await this.fetchImageForMarkdownPackaging(url);
-        if (!fetched) return;
-
+        if (!fetched) return null;
         const arrayBuffer = await fetched.blob.arrayBuffer();
         const uint8Array = new Uint8Array(arrayBuffer.slice(0));
-        const extension = this.pickImageExtension(fetched.contentType, url);
-        const fileName = `img-${String(index++).padStart(3, '0')}.${extension}`;
-        assetsFolder?.file(fileName, uint8Array);
-        mapping.set(url, `assets/${fileName}`);
+        return {
+          url,
+          bytes: uint8Array,
+          contentType: fetched.contentType,
+        };
       }),
     );
+
+    let index = 1;
+    for (const item of fetchedByOrder) {
+      if (!item) continue;
+      const extension = this.pickImageExtension(item.contentType, item.url);
+      const fileName = `img-${String(index++).padStart(3, '0')}.${extension}`;
+      assetsFolder?.file(fileName, item.bytes);
+      mapping.set(item.url, `assets/${fileName}`);
+    }
 
     const packagedMarkdown = MarkdownFormatter.rewriteImageUrls(markdown, mapping);
     zip.file(markdownEntryName, packagedMarkdown);

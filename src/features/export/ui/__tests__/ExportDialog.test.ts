@@ -19,8 +19,16 @@ describe('ExportDialog', () => {
         title: 'Export Chat',
         selectFormat: 'Select format',
         warning: 'Warning',
+        safariCmdpHint: 'Safari tip',
+        safariMarkdownHint: 'Safari markdown tip',
         cancel: 'Cancel',
         export: 'Export',
+        formatDescriptions: {
+          json: 'JSON format',
+          markdown: 'Markdown format',
+          pdf: 'PDF format',
+          image: 'Image format',
+        },
       },
     });
 
@@ -46,8 +54,16 @@ describe('ExportDialog', () => {
         title: 'Export',
         selectFormat: 'Select format',
         warning: '',
+        safariCmdpHint: 'Safari tip',
+        safariMarkdownHint: 'Safari markdown tip',
         cancel: 'Cancel',
         export: 'Export',
+        formatDescriptions: {
+          json: 'JSON format',
+          markdown: 'Markdown format',
+          pdf: 'PDF format',
+          image: 'Image format',
+        },
       },
     });
 

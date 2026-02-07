@@ -2,16 +2,16 @@
  * Menu button injection module for Deep Research export
  */
 import { StorageKeys } from '@/core/types/common';
-import { type AppLanguage, normalizeLanguage } from '@/utils/language';
-import { extractMessageDictionary } from '@/utils/localeMessages';
-import type { TranslationKey } from '@/utils/translations';
 import { ConversationExportService } from '@/features/export/services/ConversationExportService';
 import type {
-  ChatTurn as ExportChatTurn,
   ConversationMetadata,
+  ChatTurn as ExportChatTurn,
   ExportFormat,
 } from '@/features/export/types/export';
 import { ExportDialog } from '@/features/export/ui/ExportDialog';
+import { type AppLanguage, normalizeLanguage } from '@/utils/language';
+import { extractMessageDictionary } from '@/utils/localeMessages';
+import type { TranslationKey } from '@/utils/translations';
 
 import { downloadMarkdown } from './download';
 import { extractThinkingPanels } from './extractor';
@@ -55,17 +55,19 @@ function waitForElement(selector: string, timeout: number = 5000): Promise<Eleme
  */
 async function loadDictionaries(): Promise<Dictionaries> {
   try {
-    const [enRaw, zhRaw, zhTWRaw, jaRaw, frRaw, esRaw, ptRaw, arRaw, ruRaw] = await Promise.all([
-      import(/* @vite-ignore */ '../../../locales/en/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/zh/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/zh_TW/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/ja/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/fr/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/es/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/pt/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/ar/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/ru/messages.json'),
-    ]);
+    const [enRaw, zhRaw, zhTWRaw, jaRaw, frRaw, esRaw, ptRaw, arRaw, ruRaw, koRaw] =
+      await Promise.all([
+        import(/* @vite-ignore */ '../../../locales/en/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/zh/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/zh_TW/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/ja/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/fr/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/es/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/pt/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/ar/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/ru/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/ko/messages.json'),
+      ]);
 
     return {
       en: extractMessageDictionary(enRaw),
@@ -77,10 +79,22 @@ async function loadDictionaries(): Promise<Dictionaries> {
       pt: extractMessageDictionary(ptRaw),
       ar: extractMessageDictionary(arRaw),
       ru: extractMessageDictionary(ruRaw),
+      ko: extractMessageDictionary(koRaw),
     };
   } catch (error) {
     console.error('[Gemini Voyager] Error loading dictionaries:', error);
-    return { en: {}, zh: {}, zh_TW: {}, ja: {}, fr: {}, es: {}, pt: {}, ar: {}, ru: {} };
+    return {
+      en: {},
+      zh: {},
+      zh_TW: {},
+      ja: {},
+      fr: {},
+      es: {},
+      pt: {},
+      ar: {},
+      ru: {},
+      ko: {},
+    };
   }
 }
 
@@ -350,8 +364,16 @@ function handleSaveReport(dict: Dictionaries, lang: AppLanguage): void {
       title: t('deepResearchSaveReport'),
       selectFormat: t('export_dialog_select'),
       warning: '',
+      safariCmdpHint: t('export_dialog_safari_cmdp_hint'),
+      safariMarkdownHint: t('export_dialog_safari_markdown_hint'),
       cancel: t('pm_cancel'),
       export: t('pm_export'),
+      formatDescriptions: {
+        json: t('export_format_json_description'),
+        markdown: t('export_format_markdown_description'),
+        pdf: t('export_format_pdf_description'),
+        image: t('export_format_image_description'),
+      },
     },
   });
 }
@@ -422,7 +444,10 @@ export async function injectDownloadButton(): Promise<void> {
       '.gv-deep-research-download',
     ) as HTMLButtonElement | null;
     if (!downloadButton) {
-      downloadButton = createDownloadButton(t('deepResearchDownload'), t('deepResearchDownloadTooltip'));
+      downloadButton = createDownloadButton(
+        t('deepResearchDownload'),
+        t('deepResearchDownloadTooltip'),
+      );
       menuContent.appendChild(downloadButton);
     }
 

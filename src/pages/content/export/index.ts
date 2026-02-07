@@ -6,16 +6,16 @@ import type { TranslationKey } from '@/utils/translations';
 
 import { ConversationExportService } from '../../../features/export/services/ConversationExportService';
 import type {
-  ChatTurn as ExportChatTurn,
   ConversationMetadata,
+  ChatTurn as ExportChatTurn,
   ExportFormat,
 } from '../../../features/export/types/export';
 import { ExportDialog } from '../../../features/export/ui/ExportDialog';
+import { groupSelectedMessagesByTurn } from './selectionUtils';
 import {
   computeConversationFingerprint,
   waitForConversationFingerprintChangeOrTimeout,
 } from './topNodePreload';
-import { groupSelectedMessagesByTurn } from './selectionUtils';
 
 // Storage key to persist export state across reloads (e.g. when clicking top node triggers refresh)
 const SESSION_KEY_PENDING_EXPORT = 'gv_export_pending';
@@ -422,17 +422,19 @@ function ensureButtonInjected(container: Element): HTMLButtonElement | null {
 
 async function loadDictionaries(): Promise<Record<AppLanguage, Record<string, string>>> {
   try {
-    const [enRaw, zhRaw, zhTWRaw, jaRaw, frRaw, esRaw, ptRaw, arRaw, ruRaw] = await Promise.all([
-      import(/* @vite-ignore */ '../../../locales/en/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/zh/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/zh_TW/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/ja/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/fr/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/es/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/pt/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/ar/messages.json'),
-      import(/* @vite-ignore */ '../../../locales/ru/messages.json'),
-    ]);
+    const [enRaw, zhRaw, zhTWRaw, jaRaw, frRaw, esRaw, ptRaw, arRaw, ruRaw, koRaw] =
+      await Promise.all([
+        import(/* @vite-ignore */ '../../../locales/en/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/zh/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/zh_TW/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/ja/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/fr/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/es/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/pt/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/ar/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/ru/messages.json'),
+        import(/* @vite-ignore */ '../../../locales/ko/messages.json'),
+      ]);
 
     return {
       en: extractMessageDictionary(enRaw),
@@ -444,9 +446,21 @@ async function loadDictionaries(): Promise<Record<AppLanguage, Record<string, st
       pt: extractMessageDictionary(ptRaw),
       ar: extractMessageDictionary(arRaw),
       ru: extractMessageDictionary(ruRaw),
+      ko: extractMessageDictionary(koRaw),
     };
   } catch {
-    return { en: {}, zh: {}, zh_TW: {}, ja: {}, fr: {}, es: {}, pt: {}, ar: {}, ru: {} };
+    return {
+      en: {},
+      zh: {},
+      zh_TW: {},
+      ja: {},
+      fr: {},
+      es: {},
+      pt: {},
+      ar: {},
+      ru: {},
+      ko: {},
+    };
   }
 }
 
@@ -835,7 +849,9 @@ async function performFinalExport(
   };
 
   const updateBottomBar = (bar: HTMLElement) => {
-    const countEl = bar.querySelector('[data-gv-export-selection-count="true"]') as HTMLElement | null;
+    const countEl = bar.querySelector(
+      '[data-gv-export-selection-count="true"]',
+    ) as HTMLElement | null;
     if (countEl) {
       countEl.textContent = t('export_select_mode_count').replace(
         '{count}',
@@ -843,12 +859,16 @@ async function performFinalExport(
       );
     }
 
-    const exportBtn = bar.querySelector('[data-gv-export-action="export"]') as HTMLButtonElement | null;
+    const exportBtn = bar.querySelector(
+      '[data-gv-export-action="export"]',
+    ) as HTMLButtonElement | null;
     if (exportBtn) {
       exportBtn.disabled = selectedIds.size === 0;
     }
 
-    const selectAllBtn = bar.querySelector('[data-gv-export-action="selectAll"]') as HTMLButtonElement | null;
+    const selectAllBtn = bar.querySelector(
+      '[data-gv-export-action="selectAll"]',
+    ) as HTMLButtonElement | null;
     if (selectAllBtn) {
       const isAllSelected = allMessageIds.length > 0 && selectedIds.size === allMessageIds.length;
       selectAllBtn.dataset.checked = isAllSelected ? 'true' : 'false';
@@ -892,7 +912,9 @@ async function performFinalExport(
       autoSelectAll = false;
       const next = !selectedIds.has(msg.messageId);
       setSelected(msg.messageId, next);
-      const bar = document.querySelector('[data-gv-export-select-bar="true"]') as HTMLElement | null;
+      const bar = document.querySelector(
+        '[data-gv-export-select-bar="true"]',
+      ) as HTMLElement | null;
       if (bar) updateBottomBar(bar);
     });
 
@@ -903,7 +925,9 @@ async function performFinalExport(
     idToCheckbox.set(msg.messageId, checkbox);
   };
 
-  const computeSortedMessages = (pairsInput: ChatTurn[]): Array<ExportMessage & { absTop: number }> => {
+  const computeSortedMessages = (
+    pairsInput: ChatTurn[],
+  ): Array<ExportMessage & { absTop: number }> => {
     const msgs = buildExportMessagesFromPairs(pairsInput);
     const withPos = msgs.map((m) => {
       const rect = m.hostElement.getBoundingClientRect();
@@ -1295,8 +1319,16 @@ async function showExportDialog(
       title: t('export_dialog_title'),
       selectFormat: t('export_dialog_select'),
       warning: t('export_dialog_warning'),
+      safariCmdpHint: t('export_dialog_safari_cmdp_hint'),
+      safariMarkdownHint: t('export_dialog_safari_markdown_hint'),
       cancel: t('pm_cancel'),
       export: t('pm_export'),
+      formatDescriptions: {
+        json: t('export_format_json_description'),
+        markdown: t('export_format_markdown_description'),
+        pdf: t('export_format_pdf_description'),
+        image: t('export_format_image_description'),
+      },
     },
   });
 }
