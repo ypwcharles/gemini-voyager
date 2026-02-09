@@ -15,6 +15,7 @@ import type {
   ExportOptions,
   ExportResult,
 } from '../types/export';
+import { IMAGE_RENDER_EVENT_ERROR_CODE, isEventLikeImageRenderError } from '../types/errors';
 import { DOMContentExtractor } from './DOMContentExtractor';
 import { DeepResearchPDFPrintService } from './DeepResearchPDFPrintService';
 import { ImageExportService } from './ImageExportService';
@@ -68,9 +69,25 @@ export class ConversationExportService {
       return {
         success: false,
         format: options.format,
-        error: error instanceof Error ? error.message : String(error),
+        error: this.normalizeError(error),
       };
     }
+  }
+
+  private static normalizeError(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    if (typeof Event !== 'undefined' && error instanceof Event) {
+      return IMAGE_RENDER_EVENT_ERROR_CODE;
+    }
+
+    if (isEventLikeImageRenderError(error)) {
+      return IMAGE_RENDER_EVENT_ERROR_CODE;
+    }
+
+    return String(error);
   }
 
   private static async exportDocument(
