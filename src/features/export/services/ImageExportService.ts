@@ -8,8 +8,8 @@ import { toBlob } from 'html-to-image';
 
 import { isSafari } from '@/core/utils/browser';
 
-import type { ChatTurn, ConversationMetadata } from '../types/export';
 import { isEventLikeImageRenderError } from '../types/errors';
+import type { ChatTurn, ConversationMetadata } from '../types/export';
 import { DOMContentExtractor } from './DOMContentExtractor';
 
 export interface RenderableDocumentContent {

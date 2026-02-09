@@ -7,6 +7,7 @@ import JSZip from 'jszip';
 
 import { isSafari } from '@/core/utils/browser';
 
+import { IMAGE_RENDER_EVENT_ERROR_CODE, isEventLikeImageRenderError } from '../types/errors';
 import type {
   ChatTurn,
   ConversationMetadata,
@@ -15,7 +16,6 @@ import type {
   ExportOptions,
   ExportResult,
 } from '../types/export';
-import { IMAGE_RENDER_EVENT_ERROR_CODE, isEventLikeImageRenderError } from '../types/errors';
 import { DOMContentExtractor } from './DOMContentExtractor';
 import { DeepResearchPDFPrintService } from './DeepResearchPDFPrintService';
 import { ImageExportService } from './ImageExportService';
