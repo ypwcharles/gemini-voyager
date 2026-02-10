@@ -17,9 +17,11 @@ import { showExportToast } from '../../../features/export/ui/ExportToast';
 import { filterOutDeepResearchImmersiveNodes, resolveConversationRoot } from './conversationDom';
 import {
   getConversationMenuContext,
+  getResponseMenuContext,
   injectConversationMenuExportButton,
+  injectResponseMenuExportButton,
 } from './conversationMenuInjection';
-import { groupSelectedMessagesByTurn } from './selectionUtils';
+import { groupSelectedMessagesByTurn, resolveInitialSelectedMessageIds } from './selectionUtils';
 import { resolveSidebarConversationTarget } from './sidebarConversationTarget';
 import {
   consumePendingSidebarExportIntent,
@@ -33,11 +35,16 @@ import {
 // Storage key to persist export state across reloads (e.g. when clicking top node triggers refresh)
 const SESSION_KEY_PENDING_EXPORT = 'gv_export_pending';
 const CONVERSATION_MENU_SELECTOR = '.mat-mdc-menu-panel[role="menu"]';
+const CONVERSATION_MENU_TRIGGER_TEST_ID = 'actions-menu-button';
+const RESPONSE_MENU_TRIGGER_TEST_ID = 'more-menu-button';
+const MENU_INJECTION_RETRY_LIMIT = 8;
+const MENU_INJECTION_RETRY_DELAY_MS = 80;
 let conversationMenuObserver: MutationObserver | null = null;
 
 interface PendingExportState {
   format: ExportFormat;
   fontSize?: number;
+  initialSelectedMessageId?: string;
   attempt: number;
   url: string;
   status: 'clicking';
@@ -425,6 +432,29 @@ function buildExportMessagesFromPairs(pairs: ChatTurn[]): ExportMessage[] {
     }
   });
   return out;
+}
+
+function resolveAssistantMessageIdFromMenuTrigger(trigger: HTMLElement | null): string | null {
+  if (!trigger) return null;
+
+  const assistantHost = trigger.closest(
+    '.response-container, response-container, .model-response, model-response',
+  ) as HTMLElement | null;
+  if (!assistantHost) return null;
+
+  const messages = buildExportMessagesFromPairs(collectChatPairs());
+  const target = messages.find((message) => {
+    if (message.role !== 'assistant') return false;
+    const host = message.hostElement;
+    return (
+      host === assistantHost ||
+      host.contains(assistantHost) ||
+      assistantHost.contains(host) ||
+      host.contains(trigger)
+    );
+  });
+
+  return target?.messageId || null;
 }
 
 function ensureDropdownInjected(logoElement: Element): HTMLButtonElement | null {
@@ -880,10 +910,12 @@ async function executeExportSequence(
   lang: AppLanguage,
   paramState?: PendingExportState,
   fontSize?: number,
+  initialSelectedMessageId?: string,
 ): Promise<void> {
   const state: PendingExportState = paramState || {
     format,
     fontSize,
+    initialSelectedMessageId,
     attempt: 0,
     url: location.href,
     status: 'clicking',
@@ -918,7 +950,7 @@ async function executeExportSequence(
   if (!topNode) {
     console.log('[Gemini Voyager] No top node found, proceeding to export directly.');
     sessionStorage.removeItem(SESSION_KEY_PENDING_EXPORT);
-    await performFinalExport(format, dict, lang, state.fontSize);
+    await performFinalExport(format, dict, lang, state.fontSize, state.initialSelectedMessageId);
     return;
   }
 
@@ -965,7 +997,7 @@ async function executeExportSequence(
 
   console.log('[Gemini Voyager] No refresh or update detected. Exporting...');
   sessionStorage.removeItem(SESSION_KEY_PENDING_EXPORT);
-  await performFinalExport(format, dict, lang, state.fontSize);
+  await performFinalExport(format, dict, lang, state.fontSize, state.initialSelectedMessageId);
 }
 
 /**
@@ -976,6 +1008,7 @@ async function performFinalExport(
   dict: Record<AppLanguage, Record<string, string>>,
   lang: AppLanguage,
   fontSize?: number,
+  initialSelectedMessageId?: string,
 ) {
   const t = (key: TranslationKey) => dict[lang]?.[key] ?? dict.en?.[key] ?? key;
 
@@ -994,6 +1027,7 @@ async function performFinalExport(
   const idToHost = new Map<string, HTMLElement>();
   const idToCheckbox = new Map<string, HTMLButtonElement>();
   const knownIds = new Set<string>();
+  let pendingInitialSelectionId: string | null = initialSelectedMessageId || null;
 
   let autoSelectAll = false;
 
@@ -1121,6 +1155,15 @@ async function performFinalExport(
     // Auto-select new messages when a policy is active.
     if (autoSelectAll) {
       for (const id of allMessageIds) setSelected(id, true);
+    }
+
+    const initialSelected = resolveInitialSelectedMessageIds(
+      allMessageIds,
+      pendingInitialSelectionId,
+    );
+    if (initialSelected.size > 0) {
+      initialSelected.forEach((id) => setSelected(id, true));
+      pendingInitialSelectionId = null;
     }
   };
 
@@ -1351,6 +1394,10 @@ async function checkPendingExport() {
     const state: PendingExportState = {
       format: parsed.format,
       fontSize: typeof parsed.fontSize === 'number' ? parsed.fontSize : undefined,
+      initialSelectedMessageId:
+        typeof parsed.initialSelectedMessageId === 'string'
+          ? parsed.initialSelectedMessageId
+          : undefined,
       attempt: parsed.attempt,
       url: parsed.url,
       status: parsed.status,
@@ -1388,6 +1435,16 @@ function getConversationMenuPanelsFromNode(node: HTMLElement): HTMLElement[] {
   return panels;
 }
 
+function parseMenuTriggerPanelIds(trigger: HTMLElement): string[] {
+  const raw = `${trigger.getAttribute('aria-controls') || ''} ${
+    trigger.getAttribute('aria-owns') || ''
+  }`;
+  return raw
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function setupConversationMenuExportObserver({
   dict,
   getCurrentLanguage,
@@ -1395,40 +1452,84 @@ function setupConversationMenuExportObserver({
 }: {
   dict: Record<AppLanguage, Record<string, string>>;
   getCurrentLanguage: () => AppLanguage;
-  onExport: (context: { menuType: 'top' | 'sidebar'; trigger: HTMLElement | null }) => void;
+  onExport: (context: {
+    menuType: 'top' | 'sidebar' | 'message';
+    trigger: HTMLElement | null;
+  }) => void;
 }): void {
   if (conversationMenuObserver) return;
 
-  const injectOnPanel = (menuPanel: HTMLElement) => {
-    window.setTimeout(() => {
-      if (!menuPanel.isConnected) return;
-      const menuContext = getConversationMenuContext(menuPanel);
-      if (!menuContext) return;
+  const tryInjectOnPanel = (
+    menuPanel: HTMLElement,
+    retriesLeft: number = MENU_INJECTION_RETRY_LIMIT,
+  ) => {
+    if (!menuPanel.isConnected) return;
+    const currentLang = getCurrentLanguage();
+    const label =
+      dict[currentLang]?.['exportChatJson'] ??
+      dict.en?.['exportChatJson'] ??
+      'Export conversation history';
+    const tooltip =
+      dict[currentLang]?.['exportChatJson'] ??
+      dict.en?.['exportChatJson'] ??
+      'Export conversation history';
 
-      const currentLang = getCurrentLanguage();
-      const label =
-        dict[currentLang]?.['exportChatJson'] ??
-        dict.en?.['exportChatJson'] ??
-        'Export conversation history';
-      const tooltip =
-        dict[currentLang]?.['exportChatJson'] ??
-        dict.en?.['exportChatJson'] ??
-        'Export conversation history';
-
-      injectConversationMenuExportButton(menuPanel, {
+    const menuContext = getConversationMenuContext(menuPanel);
+    if (menuContext) {
+      const injected = injectConversationMenuExportButton(menuPanel, {
         label,
         tooltip,
         onClick: () => onExport(menuContext),
       });
-    }, 50);
+      if (!injected && retriesLeft > 0) {
+        window.setTimeout(
+          () => tryInjectOnPanel(menuPanel, retriesLeft - 1),
+          MENU_INJECTION_RETRY_DELAY_MS,
+        );
+      }
+      return;
+    }
+
+    const responseMenuContext = getResponseMenuContext(menuPanel);
+    if (responseMenuContext) {
+      const injected = injectResponseMenuExportButton(menuPanel, {
+        label,
+        tooltip,
+        onClick: () =>
+          onExport({
+            menuType: 'message',
+            trigger: responseMenuContext.trigger,
+          }),
+      });
+      if (!injected && retriesLeft > 0) {
+        window.setTimeout(
+          () => tryInjectOnPanel(menuPanel, retriesLeft - 1),
+          MENU_INJECTION_RETRY_DELAY_MS,
+        );
+      }
+      return;
+    }
+
+    if (retriesLeft > 0) {
+      window.setTimeout(
+        () => tryInjectOnPanel(menuPanel, retriesLeft - 1),
+        MENU_INJECTION_RETRY_DELAY_MS,
+      );
+    }
   };
 
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       mutation.addedNodes.forEach((node) => {
         if (!(node instanceof HTMLElement)) return;
+        const panelSet = new Set<HTMLElement>();
         const panels = getConversationMenuPanelsFromNode(node);
-        panels.forEach(injectOnPanel);
+        panels.forEach((panel) => panelSet.add(panel));
+        const closestPanel = node.closest(CONVERSATION_MENU_SELECTOR) as HTMLElement | null;
+        if (closestPanel) panelSet.add(closestPanel);
+        panelSet.forEach((panel) => {
+          window.setTimeout(() => tryInjectOnPanel(panel), 30);
+        });
       });
     }
   });
@@ -1437,13 +1538,45 @@ function setupConversationMenuExportObserver({
   conversationMenuObserver = observer;
 
   const existingPanels = document.querySelectorAll<HTMLElement>(CONVERSATION_MENU_SELECTOR);
-  existingPanels.forEach(injectOnPanel);
+  existingPanels.forEach((panel) => window.setTimeout(() => tryInjectOnPanel(panel), 30));
+
+  const onMenuTriggerInteraction = (event: Event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const trigger = target.closest(
+      `[data-test-id="${CONVERSATION_MENU_TRIGGER_TEST_ID}"], [data-test-id="${RESPONSE_MENU_TRIGGER_TEST_ID}"]`,
+    ) as HTMLElement | null;
+    if (!trigger) return;
+
+    const panelIds = parseMenuTriggerPanelIds(trigger);
+    if (panelIds.length === 0) return;
+
+    for (let attempt = 0; attempt <= MENU_INJECTION_RETRY_LIMIT; attempt++) {
+      window.setTimeout(() => {
+        panelIds.forEach((id) => {
+          const panel = document.getElementById(id);
+          if (!(panel instanceof HTMLElement)) return;
+          if (!panel.matches(CONVERSATION_MENU_SELECTOR)) return;
+          tryInjectOnPanel(panel);
+        });
+      }, attempt * MENU_INJECTION_RETRY_DELAY_MS);
+    }
+  };
+
+  document.addEventListener('click', onMenuTriggerInteraction, true);
+  document.addEventListener('pointerdown', onMenuTriggerInteraction, true);
 
   window.addEventListener(
     'beforeunload',
     () => {
       try {
         conversationMenuObserver?.disconnect();
+      } catch {}
+      try {
+        document.removeEventListener('click', onMenuTriggerInteraction, true);
+      } catch {}
+      try {
+        document.removeEventListener('pointerdown', onMenuTriggerInteraction, true);
       } catch {}
       conversationMenuObserver = null;
     },
@@ -1476,6 +1609,11 @@ export async function startExportButton(): Promise<void> {
     onExport: (context) => {
       if (context.menuType === 'sidebar' && context.trigger) {
         void exportFromSidebarConversationTrigger(context.trigger, dict, () => lang);
+        return;
+      }
+      if (context.menuType === 'message') {
+        const initialSelectedMessageId = resolveAssistantMessageIdFromMenuTrigger(context.trigger);
+        void showExportDialog(dict, lang, { initialSelectedMessageId });
         return;
       }
       void showExportDialog(dict, lang);
@@ -1571,6 +1709,9 @@ export async function startExportButton(): Promise<void> {
 async function showExportDialog(
   dict: Record<AppLanguage, Record<string, string>>,
   lang: AppLanguage,
+  options?: {
+    initialSelectedMessageId?: string | null;
+  },
 ): Promise<void> {
   const t = (key: TranslationKey) => dict[lang]?.[key] ?? dict.en?.[key] ?? key;
 
@@ -1581,7 +1722,14 @@ async function showExportDialog(
   dialog.show({
     onExport: async (format, fontSize) => {
       try {
-        await executeExportSequence(format, dict, lang, undefined, fontSize);
+        await executeExportSequence(
+          format,
+          dict,
+          lang,
+          undefined,
+          fontSize,
+          options?.initialSelectedMessageId || undefined,
+        );
       } catch (err) {
         console.error('[Gemini Voyager] Export error:', err);
       }
